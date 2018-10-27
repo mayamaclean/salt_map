@@ -1,7 +1,7 @@
 [package]
 name = "salt_map"
 version = "0.1.0"
-authors = ["mayamaclean <maya.c.maclean@gmail.com>"]
+authors = ["maya"]
 
 [dependencies]
 blake2-rfc = "0.2.18"

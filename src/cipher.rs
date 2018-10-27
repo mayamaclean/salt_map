@@ -1,3 +1,6 @@
+/// this module is mainly for convenience structs and functions
+/// associated with parallel authenticated en/decryption 
+
 use super::{AuthKey, CryptKey, CryptNon};
 
 // contains 'shared' cipher and auth states plus

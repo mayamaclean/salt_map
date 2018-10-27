@@ -1,3 +1,4 @@
+/// tests, crates, shared convenience types/aliases
 extern crate argon2;
 extern crate blake2_rfc;
 extern crate memmap;
@@ -159,16 +160,44 @@ mod tests {
         assert!(cnt > 96);
     }
 
-    #[test]
+    //#[test]
     fn test_get_ent_from_keystore() {
-        use ::tiny_keccak::Keccak;
-
         let paswd = "ReallySecurePassword12345";
         let path  = "keystore";
 
         let mut ks = key_store::KeyStore::new_from(paswd, path).expect("ks error");
         let dt = [0u8; 64];
 
-        assert!(ks.get_entry(&dt));
+        assert!(ks.get_entry(&dt).is_some());
+    }
+
+    #[test]
+    fn test_update_ent_from_keystore() {
+        use ::tiny_keccak::Keccak;
+
+        let paswd = "ReallySecurePassword12345";
+        let path  = "keystore";
+
+        let mut ks: key_store::KeyStore;
+        if ::std::fs::metadata(path).is_ok() {
+            ks = key_store::KeyStore::new_from(paswd, path).expect("ks error");
+        } else {
+            ks = key_store::KeyStore::create_from(paswd, path).expect("ks creation error");
+        }
+        let dt = [0u8; 64];
+
+        let mut h = Keccak::new_keccak512();
+        h.update(&ks.get_own_auth()[..]);
+        h.update(&ks.get_own_final()[..]);
+        h.update(&rust_sodium::randombytes::randombytes(2)[..]);
+        h.update(b"the hash");
+
+        let mut r = [0u8; 64];
+        h.finalize(&mut r);
+
+        ks.add_entry(&r, &dt[0..16], &dt[0..16], &dt[0..64]);
+        ks.update_entry(&r, &dt[0..16], &dt[0..16], &r);
+
+        assert!(ks.current[0..64] == r[..]);
     }
 }

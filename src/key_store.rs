@@ -1,3 +1,7 @@
+/// this module defines a file structure and associated
+/// functions for querying an encrypted key/value store
+/// as well as assuring its own authenticity
+
 pub struct Entry([u8; 160]);
 
 impl ::std::ops::Index<::std::ops::Range<usize>> for Entry {
@@ -44,6 +48,38 @@ impl ::std::ops::Index<usize> for Entry {
 impl ::std::ops::IndexMut<usize> for Entry {
     #[inline]
     fn index_mut(&mut self, idx: usize) -> &mut u8 {
+        &mut self.0[idx]
+    }
+}
+
+impl ::std::ops::Index<::std::ops::RangeTo<usize>> for Entry {
+    type Output = [u8];
+
+    #[inline]
+    fn index(&self, idx: ::std::ops::RangeTo<usize>) -> &[u8] {
+        &self.0[idx]
+    }
+}
+
+impl ::std::ops::IndexMut<::std::ops::RangeTo<usize>> for Entry {
+    #[inline]
+    fn index_mut(&mut self, idx: ::std::ops::RangeTo<usize>) -> &mut [u8] {
+        &mut self.0[idx]
+    }
+}
+
+impl ::std::ops::Index<::std::ops::RangeFrom<usize>> for Entry {
+    type Output = [u8];
+
+    #[inline]
+    fn index(&self, idx: ::std::ops::RangeFrom<usize>) -> &[u8] {
+        &self.0[idx]
+    }
+}
+
+impl ::std::ops::IndexMut<::std::ops::RangeFrom<usize>> for Entry {
+    #[inline]
+    fn index_mut(&mut self, idx: ::std::ops::RangeFrom<usize>) -> &mut [u8] {
         &mut self.0[idx]
     }
 }
@@ -95,6 +131,14 @@ pub struct KeyStore {
 }
 
 impl KeyStore {
+    pub fn get_own_auth(&self) -> &::AuthKey {
+        &self.key.auth // wat
+    }
+
+    pub fn get_own_final(&self) -> &::AuthKey {
+        &self.key.auth
+    }
+
     pub fn create_from(pass: &str, path: &str) -> Option<KeyStore> {
         use ::tiny_keccak::Keccak;
         use std::fs::OpenOptions;
@@ -172,7 +216,7 @@ impl KeyStore {
         let mut r = [0u8; 64];
         h.finalize(&mut r);
 
-        //println!("read:\n{:?}\nmade:\n{:?}", &header[32..], &r[..]);
+        println!("\n******\nread:\n{:?}\n\nmade:\n{:?}\n******", &header[32..], &r[..]);
         let a = ::rust_sodium::utils::memcmp(&header[32..], &r);
 
         Some(KeyStore {
@@ -192,9 +236,6 @@ impl KeyStore {
         h.update(self.key.auth());
         h.update(self.key.f_auth());
 
-        let len = ::std::fs::metadata(&self.backing).expect("no backing in function 2").len();
-        println!("len: {}", len);
-
         let f = OpenOptions::new()
             .write(true)
             .read(true)
@@ -208,8 +249,6 @@ impl KeyStore {
         let mut r = [0u8; 64];
         h.finalize(&mut r);
 
-        println!("{:?}", &r[..]);
-
         map[32..96].clone_from_slice(&r);
         map.flush().expect("map flush error");
     }
@@ -221,7 +260,9 @@ impl KeyStore {
 
         if self.authenticated == false { return }
 
-        let mut f   = OpenOptions::new().read(true).write(true).append(true).open(&self.backing).expect("no open");
+        let mut f   = OpenOptions::new().read(true).write(true)
+                                        .append(true).open(&self.backing)
+                                        .expect("no open");
         let mut ent = Entry::from_pieces(name_hash, csalt, asalt, file_hash).expect("no entry");
 
         let len = ::std::fs::metadata(&self.backing).expect("no check in function 3").len();
@@ -235,11 +276,13 @@ impl KeyStore {
         self.update_hmac();
     }
 
-    pub fn get_entry(&mut self, name_hash: &[u8]) -> bool {
+    pub fn get_entry(&mut self, name_hash: &[u8]) -> Option<u64> {
         use std::fs::OpenOptions;
         use memmap::MmapOptions;
 
-        if name_hash.len() != 64 { return false }
+        if self.authenticated != true { return None }
+
+        if name_hash.len() != 64 { return None }
 
         let f   = OpenOptions::new().read(true).write(true)
                                         .append(true).open(&self.backing)
@@ -247,19 +290,57 @@ impl KeyStore {
 
         let map = unsafe { MmapOptions::new().offset(96).map_mut(&f).expect("no map") };
 
-        println!("looking for:\n{:?}", name_hash);
+        println!("\n******\nlooking for:\n{:?}", name_hash);
 
         for e in map.chunks(160).enumerate() {
             self.current.0.clone_from_slice(&e.1[..]);
 
             ::xcc::stream_xor_ic_inplace(&mut self.current.0, &self.key.nons, (e.0*3) as u64, &self.key.keys);
+            println!("using ic: {}", e.0*3);
 
             if ::rust_sodium::utils::memcmp(&self.current.0[..64], name_hash) {
-                return true
+                println!("******\n");
+                return Some(e.0 as u64)
             }
         }
 
-        return false
+        return None
+    }
+
+    pub fn update_entry(&mut self, name_hash: &[u8], csalt: &[u8], asalt: &[u8], file_hash: &[u8]) -> bool {
+        use std::fs::OpenOptions;
+        use memmap::MmapOptions;
+
+        if self.authenticated != true { return false }
+
+        if name_hash.len() != 64 { return false }
+        if csalt.len()     != 16 { return false }
+        if asalt.len()     != 16 { return false }
+        if file_hash.len() != 64 { return false }
+
+        let index = self.get_entry(name_hash).expect("get error");
+        if  index == 0 { return false }
+
+        self.current[..64].clone_from_slice(name_hash);
+        self.current[64..80].clone_from_slice(csalt);
+        self.current[80..96].clone_from_slice(asalt);
+        self.current[96..].clone_from_slice(file_hash);
+
+        let f   = OpenOptions::new().read(true).write(true)
+                                        .append(true).open(&self.backing)
+                                        .expect("no open");
+
+        let mut map = unsafe { MmapOptions::new().offset(96 + 160 * index).len(160).map_mut(&f).expect("no map") };
+
+        let mut out = Entry(self.current.0);
+        ::xcc::stream_xor_ic_inplace(&mut out[..], &self.key.nons, (index*3) as u64, &self.key.keys);
+        map.clone_from_slice(&out[..]);
+
+        map.flush().expect("map err");
+
+        self.update_hmac();
+
+        return true
     }
 
     pub fn get_crypt_key(&self) -> &[u8] {
