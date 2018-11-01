@@ -1,30 +1,39 @@
 /// this module is mainly for convenience structs and functions
-/// associated with parallel authenticated en/decryption 
-
-use super::{AuthKey, CryptKey, CryptNon};
+/// associated with parallel authenticated en/decryption
 
 // contains 'shared' cipher and auth states plus
 // a key for use with the final keccak hmac
 pub struct Cipher {
-    pub keys: CryptKey,
-    pub nons: CryptNon,
-    pub auth: AuthKey,
-    pub afin: AuthKey,
+    pub keys: ::CryptKey,
+    pub nons: ::CryptNon,
+    pub auth: ::AuthKey,
+    pub afin: ::AuthKey,
+}
+
+impl Drop for Cipher {
+    fn drop(&mut self) {
+        (0..32).for_each(|i| { self.keys.0[i] = 0u8; });
+        (0..24).for_each(|i| { self.nons.0[i] = 0u8; });
+        (0..16).for_each(|i| {
+            self.auth.0[i] = 0u8;
+            self.afin.0[i] = 0u8;
+        });
+    }
 }
 
 impl Cipher {
-    pub fn from_vecs(crypt_raw: &[u8], auth_raw: &[u8]) -> Option<Cipher> {
+    fn from_vecs(crypt_raw: &[u8], auth_raw: &[u8]) -> Option<Cipher> {
         if crypt_raw.len() < 56 || auth_raw.len() < 32 { return None }
 
         Some(Cipher {
-            keys: CryptKey::from_slice(&crypt_raw[0..32]).unwrap(),
-            nons: CryptNon::from_slice(&crypt_raw[32..56]).unwrap(),
-            auth: AuthKey::from_slice(&auth_raw[0..16]).unwrap(),
-            afin: AuthKey::from_slice(&auth_raw[16..32]).unwrap(),
+            keys: ::CryptKey::from_slice(&crypt_raw[0..32]).unwrap(),
+            nons: ::CryptNon::from_slice(&crypt_raw[32..56]).unwrap(),
+            auth: ::AuthKey::from_slice(&auth_raw[0..16]).unwrap(),
+            afin: ::AuthKey::from_slice(&auth_raw[16..32]).unwrap(),
         })
     }
 
-    pub fn from_argon(password: &str, crypt_salt: &[u8], auth_salt: &[u8]) -> Option<Cipher> {
+    pub fn from_argon(password: &str, crypt_salt: &[u8], auth_salt: &[u8], mem: u32) -> Option<Cipher> {
         if  crypt_salt.len() < 16 ||
             auth_salt.len() < 16  ||
             password.len() < 16
@@ -38,7 +47,7 @@ impl Cipher {
             ad: &[],
             hash_length: 64,
             lanes: 2,
-            mem_cost: 128*1024, //change to 2048*1024 or more for release
+            mem_cost: mem,
             secret: &[],
             thread_mode: ThreadMode::Parallel,
             time_cost: 3,
@@ -51,8 +60,8 @@ impl Cipher {
 
         let c = Cipher::from_vecs(&craw[..], &araw[..]);
 
-        ::rust_sodium::utils::memzero(&mut craw);
-        ::rust_sodium::utils::memzero(&mut araw);
+        ::memzero(&mut craw);
+        ::memzero(&mut araw);
 
         c
     }
@@ -73,8 +82,7 @@ impl ::std::fmt::Debug for Cipher {
     }
 }
 
-// contains info to map plain/ciphertext to
-// cipher states
+// probably not going to use this
 pub struct Chunk {
     pub start: usize,
     pub end:   usize,

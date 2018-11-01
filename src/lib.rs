@@ -1,38 +1,76 @@
 /// tests, crates, shared convenience types/aliases
 extern crate argon2;
 extern crate blake2_rfc;
+extern crate chashmap;
 extern crate memmap;
 extern crate rayon;
 extern crate rust_sodium;
 extern crate tiny_keccak;
 
 pub mod cipher;
+pub mod crypt;
 pub mod key_store;
 
+use memmap::MmapMut as MmapMut;
+use memmap::MmapOptions as MmapOptions;
 use rust_sodium::crypto::stream::xchacha20 as xcc;
+use rust_sodium::randombytes::randombytes as random;
+use rust_sodium::utils::memcmp as memcmp;
+use rust_sodium::utils::memzero as memzero;
+use ::tiny_keccak::Keccak as Keccak;
 
-pub struct AuthKey(pub [u8; 16]);
 pub type CryptKey = rust_sodium::crypto::stream::xchacha20::Key;
 pub type CryptNon = rust_sodium::crypto::stream::xchacha20::Nonce;
 
-impl AuthKey {
-    pub fn from_slice(raw: &[u8]) -> Option<AuthKey> {
+pub struct Salt(pub [u8; 16]);
+pub type AuthKey = Salt;
+
+impl Salt {
+    pub fn from_slice(raw: &[u8]) -> Option<Salt> {
         if raw.len() != 16 { return None }
         let mut k = [0u8; 16];
 
-        (0..16).for_each(|i| { k[i] = raw[i]; });
-        Some(AuthKey(k))
+        (0..16).for_each(|i| {
+            k[i]   = raw[i].clone();
+        });
+
+        Some(Salt(k))
     }
 }
 
-impl Drop for AuthKey {
+impl Drop for Salt {
     fn drop(&mut self) {
-        let &mut AuthKey(ref mut v) = self;
-        rust_sodium::utils::memzero(v);
+        let &mut Salt(ref mut v) = self;
+        memzero(v);
     }
 }
 
-impl std::ops::Index<std::ops::Range<usize>> for AuthKey {
+impl std::ops::Deref for Salt {
+    type Target = [u8; 16];
+
+    #[inline]
+    fn deref(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Salt {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [u8; 16] {
+        &mut self.0
+    }
+}
+
+impl std::ops::Index<std::ops::RangeTo<usize>> for Salt {
+    type Output = [u8];
+
+    #[inline]
+    fn index(&self, idx: std::ops::RangeTo<usize>) -> &[u8] {
+        &self.0[idx]
+    }
+}
+
+impl std::ops::Index<std::ops::Range<usize>> for Salt {
     type Output = [u8];
 
     #[inline]
@@ -41,7 +79,7 @@ impl std::ops::Index<std::ops::Range<usize>> for AuthKey {
     }
 }
 
-impl std::ops::Index<std::ops::RangeFull> for AuthKey {
+impl std::ops::Index<std::ops::RangeFull> for Salt {
     type Output = [u8];
 
     #[inline]
@@ -50,6 +88,103 @@ impl std::ops::Index<std::ops::RangeFull> for AuthKey {
     }
 }
 
+impl std::ops::Index<usize> for Salt {
+    type Output = u8;
+
+    #[inline]
+    fn index(&self, idx: usize) -> &u8 {
+        &self.0[idx]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Salt {
+    #[inline]
+    fn index_mut(&mut self, idx: usize) -> &mut u8 {
+        &mut self.0[idx]
+    }
+}
+
+pub struct KTag(pub [u8; 64]);
+
+impl KTag {
+    pub fn from_slice(raw: &[u8]) -> Option<KTag> {
+        if raw.len() != 64 { return None }
+        let mut k = [0u8; 64];
+
+        (0..64).for_each(|i| {
+            k[i] = raw[i].clone();
+        });
+        Some(KTag(k))
+    }
+}
+
+impl Drop for KTag {
+    fn drop(&mut self) {
+        let &mut KTag(ref mut v) = self;
+        memzero(v);
+    }
+}
+
+impl std::ops::Deref for KTag {
+    type Target = [u8; 64];
+
+    #[inline]
+    fn deref(&self) -> &[u8; 64] {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for KTag {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [u8; 64] {
+        &mut self.0
+    }
+}
+
+impl std::ops::Index<std::ops::RangeTo<usize>> for KTag {
+    type Output = [u8];
+
+    #[inline]
+    fn index(&self, idx: std::ops::RangeTo<usize>) -> &[u8] {
+        &self.0[idx]
+    }
+}
+
+impl std::ops::Index<std::ops::Range<usize>> for KTag {
+    type Output = [u8];
+
+    #[inline]
+    fn index(&self, idx: std::ops::Range<usize>) -> &[u8] {
+        &self.0[idx]
+    }
+}
+
+impl std::ops::Index<std::ops::RangeFull> for KTag {
+    type Output = [u8];
+
+    #[inline]
+    fn index(&self, idx: std::ops::RangeFull) -> &[u8] {
+        &self.0[idx]
+    }
+}
+
+impl std::ops::Index<usize> for KTag {
+    type Output = u8;
+
+    #[inline]
+    fn index(&self, idx: usize) -> &u8 {
+        &self.0[idx]
+    }
+}
+
+impl std::ops::IndexMut<usize> for KTag {
+    #[inline]
+    fn index_mut(&mut self, idx: usize) -> &mut u8 {
+        &mut self.0[idx]
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,6 +192,7 @@ mod tests {
     use std::io::prelude::*;
     use std::io::SeekFrom;
 
+    /* most of these need unwraps
     //#[test]
     fn test_chunk_map() {
         let mb = 1024*1024;
@@ -100,7 +236,7 @@ mod tests {
         let paswd = "ReallySecurePassword12345";
         let path  = "keystore";
 
-        let ks1   = key_store::KeyStore::create_from(paswd, path);
+        let ks1   = key_store::KeyStore::new_from(paswd, path);
         assert!(ks1.is_some());
         let c1 = ks1.unwrap();
 
@@ -130,7 +266,7 @@ mod tests {
     fn test_pass_open_keystore_new() {
         let paswd = "ReallySecurePassword12345";
         let path  = "keystore";
-        let ks1   = key_store::KeyStore::create_from(paswd, path);
+        let ks1   = key_store::KeyStore::new_from(paswd, path);
         assert!(ks1.is_some());
         let c1 = ks1.unwrap();
 
@@ -171,19 +307,14 @@ mod tests {
         assert!(ks.get_entry(&dt).is_some());
     }
 
-    #[test]
+    //#[test]
     fn test_update_ent_from_keystore() {
         use ::tiny_keccak::Keccak;
 
         let paswd = "ReallySecurePassword12345";
         let path  = "keystore";
 
-        let mut ks: key_store::KeyStore;
-        if ::std::fs::metadata(path).is_ok() {
-            ks = key_store::KeyStore::new_from(paswd, path).expect("ks error");
-        } else {
-            ks = key_store::KeyStore::create_from(paswd, path).expect("ks creation error");
-        }
+        let mut ks = key_store::KeyStore::new_from(paswd, path).expect("ks error");
         let dt = [0u8; 64];
 
         let mut h = Keccak::new_keccak512();
@@ -199,5 +330,23 @@ mod tests {
         ks.update_entry(&r, &dt[0..16], &dt[0..16], &r);
 
         assert!(ks.current[0..64] == r[..]);
+    }*/
+
+    #[test]
+    fn test_crypt_init() {
+        use crypt::Crypt as Crypt;
+
+        let paswd      = "ReallySecurePassword12345";
+        let path       = "cent.iso";
+        let test_crypt1 = Crypt::init(paswd, path);
+
+        assert!(test_crypt1.is_ok());
+        assert!(test_crypt1.unwrap().is_some());
+
+        let path2 = "log1";
+        let test_crypt2 = Crypt::init(paswd, path2);
+
+        assert!(test_crypt2.is_ok());
+        assert!(test_crypt2.unwrap().is_some());
     }
 }
