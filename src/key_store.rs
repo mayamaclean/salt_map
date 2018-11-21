@@ -1,8 +1,11 @@
-use ::cipher::Cipher as Cipher;
-
 /// this module defines a file structure and associated
 /// functions for querying an encrypted key/value store
 /// as well as assuring its own authenticity
+use std::fs::OpenOptions;
+use std::io::prelude::*;
+use std::io::{Seek, SeekFrom};
+use ::cipher::Cipher as Cipher;
+
 pub struct Header(pub [u8; 96]);
 
 impl Header {
@@ -21,7 +24,11 @@ impl Header {
         &self.0[32..96]
     }
 
-    pub fn from_pieces(csalt: &[u8], asalt: &[u8], hmac: &[u8]) -> Option<Header> {
+    pub fn from_pieces(csalt: &[u8],
+                       asalt: &[u8],
+                       hmac: &[u8])
+      -> Option<Header>
+    {
         if csalt.len() != 16 { return None }
         if asalt.len() != 16 { return None }
         if hmac.len()  != 64 { return None }
@@ -59,7 +66,12 @@ impl Entry {
         &self.0[96..160]
     }
 
-    pub fn from_pieces(name_hash: &[u8], csalt: &[u8], asalt: &[u8], file_hash: &[u8]) -> Option<Entry> {
+    fn from_pieces(name_hash: &[u8],
+                       csalt: &[u8],
+                       asalt: &[u8],
+                       file_hash: &[u8])
+      -> Option<Entry>
+    {
         if name_hash.len() != 64 { return None }
         if csalt.len()     != 16 { return None }
         if asalt.len()     != 16 { return None }
@@ -73,6 +85,17 @@ impl Entry {
         e[96..160].clone_from_slice(file_hash);
 
         Some(Entry(e))
+    }
+
+    pub fn update_tag(&mut self,
+                      tag: &[u8])
+      -> bool
+    {
+        if tag.len() != 64 { return false }
+
+        self[96..160].clone_from_slice(&tag[..]);
+
+        true
     }
 }
 
@@ -96,14 +119,13 @@ impl KeyStore {
     }
 
     pub fn get_own_final(&self) -> &::AuthKey {
-        &self.key.auth
+        &self.key.afin
     }
 
-    fn create_from(pass: &str, path: &str) -> Result<Option<KeyStore>, ::std::io::Error> {
-        use std::fs::OpenOptions;
-        use std::io::prelude::*;
-        use std::io::{Seek, SeekFrom};
-
+    fn create_from(pass: &str,
+                   path: &str)
+      -> Result<Option<KeyStore>, ::std::io::Error>
+    {
         let mut f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -115,7 +137,10 @@ impl KeyStore {
         let asalt = ::Salt::from_slice(&mut ::random(16))
             .expect("rng error");
 
-        let c = Cipher::from_argon(pass, &*csalt, &*asalt, 64*1024) // change for actual use
+        let c = Cipher::from_argon(pass,
+                                   &*csalt,
+                                   &*asalt,
+                                   64*1024) // change for actual use
             .expect("kdf error");
 
         let mut h = ::Keccak::new_keccak512();
@@ -124,7 +149,10 @@ impl KeyStore {
         let mut r = [0u8; 64];
         h.finalize(&mut r);
 
-        let header = match Header::from_pieces(&*csalt, &*asalt, &r) {
+        let header = match Header::from_pieces(&*csalt,
+                                               &*asalt,
+                                               &r)
+        {
             Some(x) => x,
             None    => return Ok(None),
         };
@@ -132,7 +160,9 @@ impl KeyStore {
         f.seek(SeekFrom::Start(0))?;
         f.write(&header[..])?;
 
-        println!("******\nwriting csalt: {:?}\nwriting asalt: {:?}", &header.csalt(), &header.asalt());
+        println!("******\nwriting csalt: {:?}\nwriting asalt: {:?}",
+            &header.csalt(),
+            &header.asalt());
 
         Ok(Some(
         KeyStore {
@@ -143,10 +173,10 @@ impl KeyStore {
         }))
     }
 
-    pub fn new_from(pass: &str, path: &str) -> Result<Option<KeyStore>, ::std::io::Error> {
-        use std::fs::OpenOptions;
-        use std::io::prelude::*;
-
+    pub fn new_from(pass: &str,
+                    path: &str)
+      -> Result<Option<KeyStore>, ::std::io::Error>
+    {
         let mdata = ::std::fs::metadata(path);
 
         if !mdata.is_ok() {
@@ -161,10 +191,15 @@ impl KeyStore {
         let mut header = Header([0u8; 96]);
         f.read(&mut *header)?;
 
-        let c = Cipher::from_argon(pass, &header.csalt(), &header.asalt(), 64*1024) // change for actual use
+        let c = Cipher::from_argon(pass,
+                                   &header.csalt(),
+                                   &header.asalt(),
+                                   64*1024) // change for actual use
             .expect("kdf error");
 
-        println!("******\ncsalt: {:?}\nasalt: {:?}", &header.csalt(), &header.asalt());
+        println!("******\ncsalt: {:?}\nasalt: {:?}",
+            &header.csalt(),
+            &header.asalt());
 
         let mut h = ::Keccak::new_keccak512();
         h.update(c.auth());
@@ -176,11 +211,13 @@ impl KeyStore {
         f.read_to_end(&mut buf)?;
         h.update(&buf[..]);
 
-
         let mut r = ::KTag([0u8; 64]);
         h.finalize(&mut *r);
 
-        println!("read: {:?}\nmade: {:?}", &header[32..48], &r[..16]);
+        println!("read: {:?}\nmade: {:?}",
+            &header[32..48],
+            &r[..16]);
+
         let a = ::memcmp(header.hmac(), &*r);
 
         Ok(Some(
@@ -192,9 +229,9 @@ impl KeyStore {
         }))
     }
 
-    pub fn update_hmac(&self) -> Result<Option<bool>, ::std::io::Error> {
-        use std::fs::OpenOptions;
-
+    fn update_hmac(&self)
+      -> Result<Option<bool>, ::std::io::Error>
+    {
         let mut h = ::Keccak::new_keccak512();
         h.update(self.key.auth());
         h.update(self.key.f_auth());
@@ -211,22 +248,24 @@ impl KeyStore {
         let mut r = ::KTag([0u8; 64]);
         h.finalize(&mut *r);
 
-        println!("updating with: {:?}\n\n", &r[..16]);
+        println!("updating with: {:?}\n\n",
+            &r[..16]);
 
         map[32..96].clone_from_slice(&*r);
         map.flush()?; // this should catch errors and write the relevant entry to a backup
 
-        Ok(None)
+        Ok(Some(true))
     }
 
-    pub fn add_entry(&self, name_hash: &[u8], csalt: &[u8], asalt: &[u8], file_hash: &[u8])
-        -> Result<Option<bool>, ::std::io::Error>
+    pub fn add_entry(&self,
+                     name_hash: &[u8],
+                     csalt: &[u8],
+                     asalt: &[u8],
+                     file_hash: &[u8])
+      -> Result<Option<bool>, ::std::io::Error>
     {
-        use std::fs::OpenOptions;
-        use std::io::prelude::*;
-        use std::io::{Seek, SeekFrom};
-
-        if self.authenticated == false { return Ok(Some(false)) }
+        if self.authenticated == false
+        { return Ok(Some(false)) }
 
         let mut f = OpenOptions::new()
             .read(true)
@@ -234,17 +273,25 @@ impl KeyStore {
             .append(true)
             .open(&self.backing)?;
 
-        let mut ent = Entry::from_pieces(name_hash, csalt, asalt, file_hash)
+        let mut ent = Entry::from_pieces(name_hash,
+                                         csalt,
+                                         asalt,
+                                         file_hash)
             .expect("no entry");
 
         let mdata = ::std::fs::metadata(&self.backing)?;
         let len = mdata.len();
         let cnt = (len-96)/160;
 
-        println!("using ic {}", cnt*3);
-        println!("writing entry: {:?}", &ent[..]);
+        println!("using ic {}",
+            cnt*3);
+        println!("writing entry: {:?}",
+            &ent[..]);
 
-        ::xcc::stream_xor_ic_inplace(&mut ent[..], &self.key.nons, cnt*3, &self.key.keys);
+        ::xcc::stream_xor_ic_inplace(&mut ent[..],
+                                     &self.key.nons,
+                                     cnt*3,
+                                     &self.key.keys);
 
         f.seek(SeekFrom::End(0))?;
         f.write_all(&ent[..])?; // this should catch errors and write the relevant entry to a backup
@@ -257,10 +304,11 @@ impl KeyStore {
     }
 
     pub fn get_entry(&mut self, name_hash: &[u8]) -> Result<Option<u64>, ::std::io::Error> {
-        use std::fs::OpenOptions;
+        if self.authenticated != true
+        { return Ok(None) }
 
-        if self.authenticated != true { return Ok(None) }
-        if name_hash.len()    != 64   { return Ok(None) }
+        if name_hash.len() != 64
+        { return Ok(None) }
 
         let f = OpenOptions::new()
             .read(true)
@@ -273,17 +321,25 @@ impl KeyStore {
                 .map_mut(&f)?
             };
 
-        println!("looking for: {:?}", &name_hash[0..16]);
+        println!("looking for: {:?}",
+            &name_hash[0..16]);
 
         for e in map.chunks(160).enumerate() {
             self.current.0.clone_from_slice(&e.1[..]);
 
-            ::xcc::stream_xor_ic_inplace(&mut self.current.0, &self.key.nons, (e.0*3) as u64, &self.key.keys);
-            println!("using ic: {}", e.0*3);
+            ::xcc::stream_xor_ic_inplace(&mut self.current.0,
+                                         &self.key.nons,
+                                         (e.0*3) as u64,
+                                         &self.key.keys);
+
+            println!("using ic: {}",
+                e.0*3);
 
             // todo: check how this branch gets interpreted, leaving for now out of curiosity
             if ::memcmp(&self.current.0[..64], name_hash) {
-                println!("\nfound entry:\n{:?}\n", &self.current[..]);
+                println!("\nfound entry:\n{:?}\n",
+                    &self.current[..]);
+
                 return Ok(Some(e.0 as u64))
             }
         }
@@ -291,12 +347,15 @@ impl KeyStore {
         return Ok(None)
     }
 
-    pub fn update_entry(&mut self, name_hash: &[u8], csalt: &[u8], asalt: &[u8], file_hash: &[u8])
+    fn update_entry_with_pieces(&mut self,
+                                name_hash: &[u8],
+                                csalt: &[u8],
+                                asalt: &[u8],
+                                file_hash: &[u8])
         -> Result<Option<bool>, ::std::io::Error>
     {
-        use std::fs::OpenOptions;
-
-        if self.authenticated != true { return Ok(Some(false)) }
+        if self.authenticated != true
+        { return Ok(Some(false)) }
 
         if name_hash.len() != 64 { return Ok(None) }
         if csalt.len()     != 16 { return Ok(None) }
@@ -308,7 +367,11 @@ impl KeyStore {
             None    => return Ok(None),
         };
 
-        self.current = match Entry::from_pieces(name_hash, csalt, asalt, file_hash) {
+        self.current = match Entry::from_pieces(name_hash,
+                                                csalt,
+                                                asalt,
+                                                file_hash)
+        {
             Some(x) => x,
             None    => return Ok(None),
         };
@@ -327,7 +390,11 @@ impl KeyStore {
             };
 
         let mut out = Entry(self.current.0);
-        ::xcc::stream_xor_ic_inplace(&mut out[..], &self.key.nons, (index*3) as u64, &self.key.keys);
+        ::xcc::stream_xor_ic_inplace(&mut out[..],
+                                     &self.key.nons,
+                                     (index*3) as u64,
+                                     &self.key.keys);
+
         map.clone_from_slice(&out[..]);
 
         map.flush()?;
@@ -335,17 +402,54 @@ impl KeyStore {
         Ok(self.update_hmac()?)
     }
 
-    pub fn get_crypt_key(&self) -> &[u8] {
-        self.current.crypt()
+    fn update_entry(&mut self,
+                    ent: Entry)
+      -> Result<Option<bool>, ::std::io::Error>
+    {
+        if self.authenticated == false
+        { return Ok(Some(false)) }
+
+        Ok(self.update_entry_with_pieces(ent.name(),
+                                         ent.crypt(),
+                                         ent.auth(),
+                                         ent.hmac())?)
     }
 
-    pub fn get_auth_key(&self) -> &[u8] {
-        self.current.auth()
+    pub fn update_entry_by_tag(&mut self,
+                               idx: &[u8],
+                               tag: &[u8])
+      -> Result<Option<bool>, ::std::io::Error>
+    {
+        if self.authenticated == false
+        { return Ok(Some(false)) }
+
+        if self.get_name() != idx {
+            if self.get_entry(idx)?.is_none()
+            { return Ok(None) }
+        }
+
+        if !self.current.update_tag(tag)
+        { return Ok(None) }
+
+        let tmp = Entry(self.current.clone());
+        Ok(self.update_entry(tmp)?)
     }
 
-    pub fn get_hmac(&self) -> &[u8] {
-        self.current.hmac()
-    }
+    fn get_name(&self)
+      -> &[u8]
+    { self.current.name() }
+
+    pub fn get_crypt_key(&self)
+      -> &[u8]
+    { self.current.crypt() }
+
+    pub fn get_auth_key(&self)
+      -> &[u8]
+    { self.current.auth() }
+
+    pub fn get_hmac(&self)
+      -> &[u8]
+    { self.current.hmac() }
 }
 
 impl ::std::ops::Index<::std::ops::Range<usize>> for Header {

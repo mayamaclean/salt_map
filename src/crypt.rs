@@ -1,17 +1,28 @@
+/// file auth crypt using keystore type
 use blake2_rfc::blake2b::Blake2b as Blake2b;
+use rayon::prelude::*;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::Instant;
+use ::chashmap::CHashMap;
 use ::cipher::Cipher as Cipher;
 use ::key_store::KeyStore as KeyStore;
+
+// impl zeroing password type
 
 pub struct Crypt {
     path: String,
     ciph: Cipher,
     meta: KeyStore,
     name_tag: ::KTag,
-    authenticated: bool,
+    authenticated: Option<bool>,
 }
 
 impl Crypt {
-    pub fn init(pass: &str, path: &str) -> Result<Option<Crypt>, ::std::io::Error> {
+    pub fn init(pass: &str,
+                path: &str)
+      -> Result<Option<Crypt>, ::std::io::Error>
+    {
         let cwd = match path.rfind("/") {
             Some(x) => String::from(path.split_at(x).0) + "/", // windows issues ???
             None    => String::from(""),
@@ -24,10 +35,9 @@ impl Crypt {
             None    => return Ok(None),
         };
 
-        if ks.authenticated == false { return Ok(None) } // maybe i should make it panic on non-auth?
+        if ks.authenticated == false { return Ok(None) }
 
-        let mut name_hash = ::KTag::from_slice(&mut [0u8; 64])
-            .expect("tag error");
+        let mut name_hash = ::KTag([0u8; 64]);
         let mut h = ::Keccak::new_keccak512();
 
         h.update(&ks.get_own_final()[..]);
@@ -54,7 +64,7 @@ impl Crypt {
                             .expect("kdf error"),
                     meta: ks,
                     name_tag: name_hash,
-                    authenticated: true,
+                    authenticated: None,
                 }
             ))
         }
@@ -62,61 +72,82 @@ impl Crypt {
         Some(
         Crypt {
             path: String::from(path),
-            ciph: Cipher::from_argon(pass, ks.get_crypt_key(), ks.get_auth_key(), 64*1024) // change for actual use
-                    .expect("kdf error"),
+            ciph: Cipher::from_argon(pass,
+                                     ks.get_crypt_key(),
+                                     ks.get_auth_key(),
+                                     64*1024) // change for actual use
+                                     .expect("kdf error"),
             meta: ks,
             name_tag: name_hash,
-            authenticated: true
+            authenticated: None,
         }
         ))
     }
 
-    pub fn encrypt(&mut self, pass: &str) {
-        unimplemented!();
-        // should just be: encrypt (map->stack->::xcc or map->::xcc)
-        // hash ciphertext in place, update entry for name_tag in ks
-    }
+    pub fn encrypt(&mut self)
+      -> Result<Option<bool>, ::std::io::Error>
+    {
+        let timer = Instant::now();
 
-    /*pub fn authenticate(&mut self) -> bool {
-        use ::blake2_rfc::blake2b::Blake2b;
-        use ::chashmap::CHashMap;
-        use rayon::prelude::*;
-        use std::fs::OpenOptions;
-
-        let timer = ::std::time::Instant::now();
-
-        let hash_store: CHashMap<usize, [u8; 64]> = CHashMap::new();
-
-        println!("opening {}", &self.path);
+        println!("encrypting {}", &self.path);
         let f = OpenOptions::new()
             .write(true)
             .read(true)
-            .open(&self.path)
-            .expect("no open");
+            .open(&self.path)?;
 
-        let mut map = unsafe { ::MmapMut::map_mut(&f).expect("no map") };
+        let mut map = unsafe { ::MmapMut::map_mut(&f)? };
 
-        map.par_chunks_mut(1024*1024).enumerate().for_each(|chunk| {
-            let mut h = Blake2b::with_key(64, self.meta.auth());
+        let hash_store: CHashMap<usize, ::KTag> = CHashMap::with_capacity(map.len() / (1024*1024));
 
-            h.update(&chunk.1[..]);
+        map.par_chunks_mut(1024*1024).enumerate().for_each(|c| {
+            //let mut t_timer = Instant::now();
 
-            let mut r = [0u8; 64];
+            let mut chunk = c.1;
+            let mut work  = Vec::with_capacity(chunk.len());
+            work.write_all(chunk)
+                .expect("error reading chunk");
+
+            ::xcc::stream_xor_ic_inplace(&mut work[..],
+                                         &self.ciph.nons,
+                                         c.0 as u64 * (1024*1024/64),
+                                         &self.ciph.keys);
+
+            //let c_time = t_timer.elapsed();
+
+            //t_timer = Instant::now();
+
+            let mut h = Blake2b::with_key(64, &self.ciph.auth[..]);
+
+            h.update(&work[..]);
+
+            let mut r = ::KTag([0u8; 64]);
             r.clone_from_slice(h.finalize().as_bytes());
 
-            //println!("chunk hash sample #{}: {:?}", chunk.0, &r[0..8]);
+            hash_store.insert_new(c.0, r);
 
-            hash_store.insert_new(chunk.0, r);
+            chunk.write_all(&work[..])
+                .expect("could not write chunk");
+
+            /*println!("crypt #{} took: {:#?}\ntag #{} took: {:#?}",
+                chunk.0,
+                c_time,
+                chunk.0,
+                t_timer.elapsed());*/
         });
 
-        let mut found = [0u8; 64];
+        let mut tag     = ::KTag([0u8; 64]);
         let mut finaler = ::Keccak::new_keccak512();
+
+        finaler.update(&self.ciph.afin[..]);
 
         let l = map.len();
 
         let mut idx = 0;
-        println!("map len: {}\nsupposed chunk count: {}", l, l/(1024*1024));
-        while idx < l/(1024*1024) { // probably off by one
+        println!("map len: {}\nsupposed chunk count: {}",
+            l,
+            l/(1024*1024));
+
+        while idx < l/(1024*1024) { // probably off by one?
             let e = hash_store.get(&idx);
             if e.is_some() {
                 finaler.update(&e.unwrap()[..]);
@@ -124,10 +155,114 @@ impl Crypt {
             }
         }
 
-        finaler.finalize(&mut found);
+        finaler.finalize(&mut *tag);
 
-        let result = ::memcmp(self.meta.hmac(), &found[..]);
-        println!("{:?}", timer.elapsed());
-        result
-    }*/
+        let tmp = ::KTag(self.name_tag.clone());
+
+        self.authenticated = Some(true);
+
+        println!("file took {:#?} to encrypt and tag",
+            timer.elapsed());
+
+        Ok(self.meta.update_entry_by_tag(&tmp[..],
+                                         &*tag)?)
+    }
+
+    pub fn authenticate(&mut self)
+      -> Result<Option<bool>, ::std::io::Error>
+    {
+        let timer = Instant::now();
+
+        println!("opening {}", &self.path);
+        let f = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .open(&self.path)?;
+
+        let map = unsafe { ::MmapMut::map_mut(&f)? };
+
+        let hash_store: CHashMap<usize, ::KTag> = CHashMap::with_capacity(map.len() / (1024*1024));
+
+        map.par_chunks(1024*1024).enumerate().for_each(|chunk| {
+            let mut h = Blake2b::with_key(64, &self.ciph.auth[..]);
+
+            h.update(&chunk.1[..]);
+
+            let mut r = ::KTag([0u8; 64]);
+            r.clone_from_slice(h.finalize().as_bytes());
+
+            //println!("chunk hash sample #{}: {:?}", chunk.0, &r[0..8]);
+
+            hash_store.insert_new(chunk.0, r);
+        });
+
+        let mut found = ::KTag([0u8; 64]);
+        let mut finaler = ::Keccak::new_keccak512();
+
+        finaler.update(&self.ciph.afin[..]);
+
+        let l = map.len();
+
+        let mut idx = 0;
+        println!("map len: {}\nsupposed chunk count: {}", l, l/(1024*1024));
+        while idx < l/(1024*1024) { // probably off by one?
+            let e = hash_store.get(&idx);
+            if e.is_some() {
+                finaler.update(&e.unwrap()[..]);
+                idx += 1;
+            }
+        }
+
+        finaler.finalize(&mut *found);
+
+        let result = ::memcmp(self.meta.get_hmac(), &found[..]);
+        println!("authentication took: {:?}", timer.elapsed());
+        self.authenticated = Some(result);
+        Ok(Some(result))
+    }
+
+    pub fn decrypt(&mut self)
+      -> Result<Option<bool>, ::std::io::Error>
+    {
+        if self.authenticated.is_none() {
+            match self.authenticate()? {
+                Some(false) => return Ok(Some(false)),
+                None        => return Ok(None),
+                Some(true)  => (),
+            }
+        }
+        if !self.authenticated.unwrap()
+        { return Ok(Some(false)) }
+
+        let timer = Instant::now();
+
+        println!("decrypting {}", &self.path);
+
+        let f = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .open(&self.path)?;
+
+        let mut map = unsafe { ::MmapMut::map_mut(&f)? };
+
+        map.par_chunks_mut(1024*1024).enumerate().for_each(|c| {
+            //let mut t_timer = Instant::now();
+
+            let chunk = c.1;
+
+            ::xcc::stream_xor_ic_inplace(chunk,
+                                         &self.ciph.nons,
+                                         c.0 as u64 * (1024*1024/64),
+                                         &self.ciph.keys);
+
+            /*println!("crypt #{} took: {:#?}",
+                chunk.0,
+                t_timer.elapsed());*/
+        });
+
+        println!("file took {:#?} to decrypt",
+            timer.elapsed());
+
+        Ok(Some(true))
+    }
 }

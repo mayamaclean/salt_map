@@ -17,7 +17,7 @@ use rust_sodium::crypto::stream::xchacha20 as xcc;
 use rust_sodium::randombytes::randombytes as random;
 use rust_sodium::utils::memcmp as memcmp;
 use rust_sodium::utils::memzero as memzero;
-use ::tiny_keccak::Keccak as Keccak;
+use tiny_keccak::Keccak as Keccak;
 
 pub type CryptKey = rust_sodium::crypto::stream::xchacha20::Key;
 pub type CryptNon = rust_sodium::crypto::stream::xchacha20::Nonce;
@@ -188,11 +188,63 @@ impl std::ops::IndexMut<usize> for KTag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
-    use std::io::prelude::*;
-    use std::io::SeekFrom;
+    //use std::time::{Duration, Instant};
+    //use std::io::prelude::*;
+    //use std::io::SeekFrom;
 
-    /* most of these need unwraps
+    #[test]
+    fn test_encrypt() {
+        use crypt::Crypt as Crypt;
+
+        let paswd      = "ReallySecurePassword12345";
+        let path       = "mars.gif";
+        let mut test_crypt = Crypt::init(paswd, path)
+            .expect("couldn't init crypt!")
+            .unwrap();
+
+        let e_result = test_crypt.encrypt()
+            .expect("couldn't encrypt!");
+
+        assert!(e_result.unwrap());
+    }
+
+    #[test]
+    fn test_decrypt() {
+        use crypt::Crypt as Crypt;
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let paswd      = "ReallySecurePassword12345";
+        let path       = "mars.gif";
+        let mut test_crypt = Crypt::init(paswd, path)
+            .expect("couldn't init crypt!")
+            .unwrap();
+
+        let d_result = test_crypt.decrypt()
+            .expect("couldn't decrypt!");
+
+        assert!(d_result.unwrap());
+    }
+
+    /*#[test]
+    fn test_crypt_init() {
+        use crypt::Crypt as Crypt;
+
+        let paswd       = "ReallySecurePassword12345";
+        let path        = "cent.iso";
+        let test_crypt1 = Crypt::init(paswd, path);
+
+        assert!(test_crypt1.is_ok());
+        assert!(test_crypt1.unwrap().is_some());
+
+        let path2       = "log1";
+        let test_crypt2 = Crypt::init(paswd, path2);
+
+        assert!(test_crypt2.is_ok());
+        assert!(test_crypt2.unwrap().is_some());
+    }
+
+    // most of these need unwraps, etc
     //#[test]
     fn test_chunk_map() {
         let mb = 1024*1024;
@@ -331,22 +383,4 @@ mod tests {
 
         assert!(ks.current[0..64] == r[..]);
     }*/
-
-    #[test]
-    fn test_crypt_init() {
-        use crypt::Crypt as Crypt;
-
-        let paswd      = "ReallySecurePassword12345";
-        let path       = "cent.iso";
-        let test_crypt1 = Crypt::init(paswd, path);
-
-        assert!(test_crypt1.is_ok());
-        assert!(test_crypt1.unwrap().is_some());
-
-        let path2 = "log1";
-        let test_crypt2 = Crypt::init(paswd, path2);
-
-        assert!(test_crypt2.is_ok());
-        assert!(test_crypt2.unwrap().is_some());
-    }
 }
