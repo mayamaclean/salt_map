@@ -160,9 +160,9 @@ impl KeyStore {
         f.seek(SeekFrom::Start(0))?;
         f.write(&header[..])?;
 
-        println!("******\nwriting csalt: {:?}\nwriting asalt: {:?}",
+        /*println!("******\nwriting csalt: {:?}\nwriting asalt: {:?}",
             &header.csalt(),
-            &header.asalt());
+            &header.asalt());*/
 
         Ok(Some(
         KeyStore {
@@ -197,9 +197,9 @@ impl KeyStore {
                                    64*1024) // change for actual use
             .expect("kdf error");
 
-        println!("******\ncsalt: {:?}\nasalt: {:?}",
+        /*println!("******\ncsalt: {:?}\nasalt: {:?}",
             &header.csalt(),
-            &header.asalt());
+            &header.asalt());*/
 
         let mut h = ::Keccak::new_keccak512();
         h.update(c.auth());
@@ -214,7 +214,7 @@ impl KeyStore {
         let mut r = ::KTag([0u8; 64]);
         h.finalize(&mut *r);
 
-        println!("read: {:?}\nmade: {:?}",
+        println!("*fn new_from:\n    read: {:?}\n    made: {:?}\n",
             &header[32..48],
             &r[..16]);
 
@@ -248,8 +248,8 @@ impl KeyStore {
         let mut r = ::KTag([0u8; 64]);
         h.finalize(&mut *r);
 
-        println!("updating with: {:?}\n\n",
-            &r[..16]);
+        /*println!("updating with: {:?}\n\n",
+            &r[..16]);*/
 
         map[32..96].clone_from_slice(&*r);
         map.flush()?; // this should catch errors and write the relevant entry to a backup
@@ -273,7 +273,8 @@ impl KeyStore {
             .append(true)
             .open(&self.backing)?;
 
-        let mut ent = Entry::from_pieces(name_hash,
+        let mut ent
+            = Entry::from_pieces(name_hash,
                                          csalt,
                                          asalt,
                                          file_hash)
@@ -283,10 +284,10 @@ impl KeyStore {
         let len = mdata.len();
         let cnt = (len-96)/160;
 
-        println!("using ic {}",
+        println!("*fn add_entry:\n   using ic {}\n",
             cnt*3);
-        println!("writing entry: {:?}",
-            &ent[..]);
+        /*println!("writing entry: {:?}",
+            &ent[..]);*/
 
         ::xcc::stream_xor_ic_inplace(&mut ent[..],
                                      &self.key.nons,
@@ -299,11 +300,15 @@ impl KeyStore {
         Ok(self.update_hmac()?) // this should catch errors and write the relevant entry to a backup
     }
 
-    pub fn add_whole_entry(&self, e: &Entry) -> Result<Option<bool>, ::std::io::Error> {
+    pub fn add_whole_entry(&self, e: &Entry)
+      -> Result<Option<bool>, ::std::io::Error>
+    {
         Ok(self.add_entry(e.name(), e.crypt(), e.auth(), e.hmac())?)
     }
 
-    pub fn get_entry(&mut self, name_hash: &[u8]) -> Result<Option<u64>, ::std::io::Error> {
+    pub fn get_entry(&mut self, name_hash: &[u8])
+      -> Result<Option<u64>, ::std::io::Error>
+    {
         if self.authenticated != true
         { return Ok(None) }
 
@@ -321,8 +326,8 @@ impl KeyStore {
                 .map_mut(&f)?
             };
 
-        println!("looking for: {:?}",
-            &name_hash[0..16]);
+        /*println!("looking for: {:?}",
+            &name_hash[0..16]);*/
 
         for e in map.chunks(160).enumerate() {
             self.current.0.clone_from_slice(&e.1[..]);
@@ -332,13 +337,14 @@ impl KeyStore {
                                          (e.0*3) as u64,
                                          &self.key.keys);
 
-            println!("using ic: {}",
+            println!("*fn get_entry:\n   iter {} using ic: {}\n",
+                e.0,
                 e.0*3);
 
             // todo: check how this branch gets interpreted, leaving for now out of curiosity
             if ::memcmp(&self.current.0[..64], name_hash) {
-                println!("\nfound entry:\n{:?}\n",
-                    &self.current[..]);
+                /*println!("\nfound entry:\n{:?}\n",
+                    &self.current[..]);*/
 
                 return Ok(Some(e.0 as u64))
             }

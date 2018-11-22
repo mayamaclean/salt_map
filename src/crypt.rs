@@ -38,6 +38,7 @@ impl Crypt {
         if ks.authenticated == false { return Ok(None) }
 
         let mut name_hash = ::KTag([0u8; 64]);
+
         let mut h = ::Keccak::new_keccak512();
 
         h.update(&ks.get_own_final()[..]);
@@ -97,7 +98,15 @@ impl Crypt {
 
         let mut map = unsafe { ::MmapMut::map_mut(&f)? };
 
-        let hash_store: CHashMap<usize, ::KTag> = CHashMap::with_capacity(map.len() / (1024*1024));
+        let l       = map.len();
+        let aligned = ::cipher::align(l);
+
+        println!("*fn encrypt:\n    map len: {}, supposed chunk count: {}\n",
+            l,
+            aligned);
+
+        let hash_store: CHashMap<usize, ::KTag>
+            = CHashMap::with_capacity(aligned);
 
         map.par_chunks_mut(1024*1024).enumerate().for_each(|c| {
             //let mut t_timer = Instant::now();
@@ -107,21 +116,30 @@ impl Crypt {
             work.write_all(chunk)
                 .expect("error reading chunk");
 
+            let ic = c.0 as u64 * (1024*1024/64);
+
+            println!("*fn encrypt:\n    thread {} using ic: {}\n",
+                c.0,
+                ic);
+
             ::xcc::stream_xor_ic_inplace(&mut work[..],
                                          &self.ciph.nons,
-                                         c.0 as u64 * (1024*1024/64),
+                                         ic,
                                          &self.ciph.keys);
 
             //let c_time = t_timer.elapsed();
 
             //t_timer = Instant::now();
 
-            let mut h = Blake2b::with_key(64, &self.ciph.auth[..]);
+            let mut h
+                = Blake2b::with_key(64,
+                    &self.ciph.auth[..]);
 
             h.update(&work[..]);
 
             let mut r = ::KTag([0u8; 64]);
-            r.clone_from_slice(h.finalize().as_bytes());
+            r.clone_from_slice(h.finalize()
+                                .as_bytes());
 
             hash_store.insert_new(c.0, r);
 
@@ -138,17 +156,13 @@ impl Crypt {
         let mut tag     = ::KTag([0u8; 64]);
         let mut finaler = ::Keccak::new_keccak512();
 
-        finaler.update(&self.ciph.afin[..]);
-
-        let l = map.len();
+        finaler.update(&self.ciph
+                            .afin[..]);
 
         let mut idx = 0;
-        println!("map len: {}\nsupposed chunk count: {}",
-            l,
-            l/(1024*1024));
-
-        while idx < l/(1024*1024) { // probably off by one?
+        while idx < aligned { // probably off by one?
             let e = hash_store.get(&idx);
+
             if e.is_some() {
                 finaler.update(&e.unwrap()[..]);
                 idx += 1;
@@ -157,11 +171,13 @@ impl Crypt {
 
         finaler.finalize(&mut *tag);
 
-        let tmp = ::KTag(self.name_tag.clone());
+        let tmp = ::KTag(self.name_tag
+                             .clone());
 
         self.authenticated = Some(true);
 
-        println!("file took {:#?} to encrypt and tag",
+        println!("*fn encrypt:\n    file {} took {:#?} to encrypt and tag\n",
+            self.path,
             timer.elapsed());
 
         Ok(self.meta.update_entry_by_tag(&tmp[..],
@@ -181,32 +197,44 @@ impl Crypt {
 
         let map = unsafe { ::MmapMut::map_mut(&f)? };
 
-        let hash_store: CHashMap<usize, ::KTag> = CHashMap::with_capacity(map.len() / (1024*1024));
+        let l       = map.len();
+        let aligned = ::cipher::align(l);
 
-        map.par_chunks(1024*1024).enumerate().for_each(|chunk| {
-            let mut h = Blake2b::with_key(64, &self.ciph.auth[..]);
+        println!("*fn authenticate:\n   map len: {}, supposed chunk count: {}\n",
+            l,
+            aligned);
+
+        let hash_store: CHashMap<usize, ::KTag>
+            = CHashMap::with_capacity(aligned);
+
+        map.par_chunks(1024*1024)
+           .enumerate()
+           .for_each(|chunk| {
+            let mut h
+                = Blake2b::with_key(64,
+                    &self.ciph.auth[..]);
 
             h.update(&chunk.1[..]);
 
             let mut r = ::KTag([0u8; 64]);
-            r.clone_from_slice(h.finalize().as_bytes());
+            r.clone_from_slice(h.finalize()
+                                .as_bytes());
 
             //println!("chunk hash sample #{}: {:?}", chunk.0, &r[0..8]);
 
             hash_store.insert_new(chunk.0, r);
         });
 
-        let mut found = ::KTag([0u8; 64]);
+        let mut found   = ::KTag([0u8; 64]);
         let mut finaler = ::Keccak::new_keccak512();
 
-        finaler.update(&self.ciph.afin[..]);
-
-        let l = map.len();
+        finaler.update(&self.ciph
+                            .afin[..]);
 
         let mut idx = 0;
-        println!("map len: {}\nsupposed chunk count: {}", l, l/(1024*1024));
-        while idx < l/(1024*1024) { // probably off by one?
+        while idx < aligned { // probably off by one?
             let e = hash_store.get(&idx);
+
             if e.is_some() {
                 finaler.update(&e.unwrap()[..]);
                 idx += 1;
@@ -215,9 +243,16 @@ impl Crypt {
 
         finaler.finalize(&mut *found);
 
-        let result = ::memcmp(self.meta.get_hmac(), &found[..]);
-        println!("authentication took: {:?}", timer.elapsed());
+        let result = ::memcmp(self.meta
+                                  .get_hmac(),
+                              &found[..]);
+
         self.authenticated = Some(result);
+
+        println!("*fn authenticate:\n   file {} authentication took: {:?}\n",
+            self.path,
+            timer.elapsed());
+
         Ok(Some(result))
     }
 
@@ -236,7 +271,8 @@ impl Crypt {
 
         let timer = Instant::now();
 
-        println!("decrypting {}", &self.path);
+        println!("decrypting {}",
+            &self.path);
 
         let f = OpenOptions::new()
             .write(true)
@@ -245,14 +281,22 @@ impl Crypt {
 
         let mut map = unsafe { ::MmapMut::map_mut(&f)? };
 
+        println!("*fn decrypt:\n   map len: {}\n",
+            map.len());
+
         map.par_chunks_mut(1024*1024).enumerate().for_each(|c| {
             //let mut t_timer = Instant::now();
 
             let chunk = c.1;
 
+            let ic = c.0 as u64 * (1024*1024/64);
+            println!("*fn decrypt:\n    thread {} using ic: {}\n",
+                c.0,
+                ic);
+
             ::xcc::stream_xor_ic_inplace(chunk,
                                          &self.ciph.nons,
-                                         c.0 as u64 * (1024*1024/64),
+                                         ic,
                                          &self.ciph.keys);
 
             /*println!("crypt #{} took: {:#?}",
@@ -260,7 +304,8 @@ impl Crypt {
                 t_timer.elapsed());*/
         });
 
-        println!("file took {:#?} to decrypt",
+        println!("*fn decrypt:\n    file {} took {:#?} to decrypt\n",
+            self.path,
             timer.elapsed());
 
         Ok(Some(true))

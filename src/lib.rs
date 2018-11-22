@@ -196,7 +196,7 @@ mod tests {
     fn test_encrypt() {
         use crypt::Crypt as Crypt;
 
-        let paswd      = "ReallySecurePassword12345";
+        let paswd      = "YaGet16CharsWhaddayaGet";
         let path       = "mars.gif";
         let mut test_crypt = Crypt::init(paswd, path)
             .expect("couldn't init crypt!")
@@ -212,9 +212,9 @@ mod tests {
     fn test_decrypt() {
         use crypt::Crypt as Crypt;
 
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_secs(3));
 
-        let paswd      = "ReallySecurePassword12345";
+        let paswd      = "YaGet16CharsWhaddayaGet";
         let path       = "mars.gif";
         let mut test_crypt = Crypt::init(paswd, path)
             .expect("couldn't init crypt!")

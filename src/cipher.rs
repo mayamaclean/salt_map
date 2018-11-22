@@ -75,6 +75,15 @@ impl Cipher {
     }
 }
 
+pub fn align(length: usize)
+  -> usize
+{
+    if (length % (1024 * 1024)) == 0 {
+        return length / (1024 * 1024)
+    }
+    (length / (1024 * 1024)) + 1
+}
+
 impl ::std::fmt::Debug for Cipher {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(f, "\n------\nCipher:\n*CryptKey:  {:?}\n*CryptNon:  {:?}\n*AuthKey:   {:?}\n*FinalAuth: {:?}\n------\n",
